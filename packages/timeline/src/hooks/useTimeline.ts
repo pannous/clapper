@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import * as THREE from "three"
 import type { ThreeEvent } from "@react-three/fiber"
-import { ClapProject, ClapSegment, ClapSegmentCategory, isValidNumber, newClap, serializeClap, ClapTracks, ClapEntity, ClapMeta } from "@aitube/clap"
+import { ClapProject, ClapSegment, ClapSegmentCategory, ClapOutputType, isValidNumber, newClap, newSegment, serializeClap, ClapTracks, ClapEntity, ClapMeta } from "@aitube/clap"
 
 import { TimelineSegment, SegmentEditionStatus, SegmentVisibility, TimelineStore, SegmentArea, SegmentPointerEvent, SegmentEventCallbackHandler, Invalidate } from "@/types/timeline"
 import { getDefaultProjectState, getDefaultState } from "@/utils/getDefaultState"
@@ -1206,6 +1206,161 @@ export const useTimeline = create<TimelineStore>((set, get) => ({
       })
     })
   },
+  createTrack: (category: ClapSegmentCategory): number => {
+    const {
+      width,
+      height,
+      tracks,
+      cellWidth,
+      defaultSegmentDurationInSteps,
+      durationInMsPerStep,
+      durationInMs,
+      defaultPreviewHeight,
+      defaultCellHeight,
+    } = get()
+
+    const isPreview =
+      category === ClapSegmentCategory.IMAGE ||
+      category === ClapSegmentCategory.VIDEO
+
+    const newTrackId = tracks.length
+
+    const updatedTracks = [
+      ...tracks,
+      {
+        id: newTrackId,
+        name: `${category}`,
+        isPreview,
+        height: isPreview ? defaultPreviewHeight : defaultCellHeight,
+        hue: 0,
+        occupied: false,
+        visible: true,
+      },
+    ]
+
+    set({
+      ...computeContentSizeMetrics({
+        width,
+        height,
+        tracks: updatedTracks,
+        cellWidth,
+        defaultSegmentDurationInSteps,
+        durationInMsPerStep,
+        durationInMs,
+      }),
+    })
+
+    return newTrackId
+  },
+
+  createClip: async ({
+    track,
+    startTimeInMs,
+    endTimeInMs,
+    category,
+    prompt = '',
+  }: {
+    track: number
+    startTimeInMs: number
+    endTimeInMs?: number
+    category?: ClapSegmentCategory
+    prompt?: string
+  }): Promise<TimelineSegment> => {
+    const {
+      tracks,
+      durationInMsPerStep,
+      defaultSegmentDurationInSteps,
+      addSegment,
+    } = get()
+
+    const trackInfo = tracks[track]
+    const trackCategory = category || (
+      trackInfo
+        ? ClapSegmentCategory[trackInfo.name as keyof typeof ClapSegmentCategory] || ClapSegmentCategory.GENERIC
+        : ClapSegmentCategory.GENERIC
+    )
+
+    const defaultDurationInMs = defaultSegmentDurationInSteps * durationInMsPerStep
+    const segmentEndTimeInMs = endTimeInMs || (startTimeInMs + defaultDurationInMs)
+
+    const outputType =
+      trackCategory === ClapSegmentCategory.VIDEO ? ClapOutputType.VIDEO
+      : trackCategory === ClapSegmentCategory.IMAGE ? ClapOutputType.IMAGE
+      : trackCategory === ClapSegmentCategory.DIALOGUE ? ClapOutputType.AUDIO
+      : trackCategory === ClapSegmentCategory.MUSIC ? ClapOutputType.AUDIO
+      : trackCategory === ClapSegmentCategory.SOUND ? ClapOutputType.AUDIO
+      : ClapOutputType.TEXT
+
+    const clapSegment = newSegment({
+      track,
+      startTimeInMs,
+      endTimeInMs: segmentEndTimeInMs,
+      category: trackCategory,
+      prompt,
+      outputType,
+    })
+
+    const segment = await clapSegmentToTimelineSegment(clapSegment)
+
+    await addSegment({ segment, startTimeInMs, track })
+
+    return segment
+  },
+
+  moveSegmentToTrack: (segment: TimelineSegment, targetTrack: number): boolean => {
+    const {
+      tracks,
+      segments,
+      invalidate,
+      allSegmentsChanged: prevAllChanged,
+      atLeastOneSegmentChanged: prevOneChanged,
+    } = get()
+
+    const targetTrackInfo = tracks[targetTrack]
+    if (!targetTrackInfo) { return false }
+
+    // Allow moves to empty/misc tracks or same-category tracks
+    const targetName = targetTrackInfo.name
+    const isCompatible =
+      !targetTrackInfo.occupied ||
+      targetName === '(empty)' ||
+      targetName === '(misc)' ||
+      targetName === segment.category
+
+    if (!isCompatible) { return false }
+
+    // Check for time-overlap collisions on the target track
+    const hasCollision = segments.some(
+      (s) =>
+        s.id !== segment.id &&
+        s.track === targetTrack &&
+        !(s.endTimeInMs <= segment.startTimeInMs || s.startTimeInMs >= segment.endTimeInMs)
+    )
+
+    if (hasCollision) { return false }
+
+    segment.track = targetTrack
+
+    // Update track info if it was empty
+    if (!targetTrackInfo.occupied) {
+      const isPreview =
+        segment.category === ClapSegmentCategory.IMAGE ||
+        segment.category === ClapSegmentCategory.VIDEO
+      targetTrackInfo.name = `${segment.category}`
+      targetTrackInfo.occupied = true
+      targetTrackInfo.isPreview = isPreview
+    }
+
+    set({
+      allSegmentsChanged: prevAllChanged + 1,
+      atLeastOneSegmentChanged: prevOneChanged + 1,
+    })
+
+    invalidate()
+
+    return true
+  },
+
   deleteSegments: (ids: string[]): void => {
     const {
       segments: previousSegments,
