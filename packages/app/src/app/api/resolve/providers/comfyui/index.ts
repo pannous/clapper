@@ -169,14 +169,12 @@ export async function resolveSegment(
   }
 
   mainInputs.forEach((mainInput) => {
-    if (
-      inputValues[mainInput[0]]?.id &&
-      inputValues[mainInput[0]]?.id != ClapperComfyUiInputIds.NULL
-    ) {
-      comfyApiWorkflowPromptBuilder.input(
-        inputValues[mainInput[0]]?.id,
-        mainInput[1]
-      )
+    const val = inputValues[mainInput[0]]
+    const valObj = typeof val === 'object' && val !== null && !Array.isArray(val)
+      ? (val as ClapInputValueObject)
+      : undefined
+    if (valObj?.id && valObj.id !== ClapperComfyUiInputIds.NULL) {
+      comfyApiWorkflowPromptBuilder.input(valObj.id, mainInput[1])
     }
   })
 
