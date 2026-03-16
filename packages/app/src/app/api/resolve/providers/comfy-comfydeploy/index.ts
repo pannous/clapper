@@ -1,8 +1,6 @@
 import { ResolveRequest } from '@aitube/clapper-services'
 import {
-  ClapAssetSource,
   ClapSegmentCategory,
-  ClapSegmentStatus,
   getClapAssetSourceType,
 } from '@aitube/clap'
 import { TimelineSegment } from '@aitube/timeline'
@@ -47,6 +45,13 @@ async function pollForCompletion(
       }
     )
 
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '')
+      throw new Error(
+        `ComfyDeploy API request failed with status ${response.status} ${response.statusText}: ${errorText}`
+      )
+    }
+
     const status = await response.json()
 
     if (status.status === 'success' || status.status === 'completed') {
@@ -84,13 +89,52 @@ export async function resolveSegment(
 
   const promptField = promptFields[0]
 
-  // Build input overrides for the workflow
-  const inputs: Record<string, any> = {
-    ...getWorkflowInputValues(workflow),
+  // Find negative prompt field with fallback matching (if supported)
+  const negativePromptFields = [
+    inputFields.find((f) => f.id === 'negative_prompt'),
+    inputFields.find((f) => f.id.includes('negative')),
+  ].filter((x) => typeof x !== 'undefined')
+
+  const negativePromptField = negativePromptFields[0]
+
+  // Select prompts based on segment category
+  let positivePrompt: string | undefined
+  let negativePrompt: string | undefined
+
+  switch (request.segment.category) {
+    case ClapSegmentCategory.DIALOGUE:
+      positivePrompt = request.prompts.voice?.positive
+      negativePrompt = request.prompts.voice?.negative
+      break
+    case ClapSegmentCategory.SOUND:
+      positivePrompt = request.prompts.audio?.positive
+      negativePrompt = request.prompts.audio?.negative
+      break
+    case ClapSegmentCategory.MUSIC:
+      positivePrompt = request.prompts.music?.positive
+      negativePrompt = request.prompts.music?.negative
+      break
+    default:
+      // Fallback to image prompts for visual categories or unknown types
+      positivePrompt = request.prompts.image?.positive
+      negativePrompt = request.prompts.image?.negative
+      break
   }
 
-  if (promptField) {
-    inputs[promptField.id] = request.prompts.image.positive
+  // Build input overrides for the workflow
+  const { workflowDefaultValues = {}, workflowValues = {} } =
+    getWorkflowInputValues(workflow)
+  const inputs: Record<string, any> = {
+    ...workflowDefaultValues,
+    ...workflowValues,
+  }
+
+  if (promptField && typeof positivePrompt === 'string') {
+    inputs[promptField.id] = positivePrompt
+  }
+
+  if (negativePromptField && typeof negativePrompt === 'string') {
+    inputs[negativePromptField.id] = negativePrompt
   }
 
   // Submit workflow run

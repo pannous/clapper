@@ -1,12 +1,9 @@
 import { ResolveRequest } from '@aitube/clapper-services'
 import {
-  ClapAssetSource,
   ClapSegmentCategory,
-  ClapSegmentStatus,
   getClapAssetSourceType,
 } from '@aitube/clap'
 import { TimelineSegment } from '@aitube/timeline'
-import { getWorkflowInputValues } from '../getWorkflowInputValues'
 import {
   ComfyIcuApiRequestRunWorkflow,
   ComfyIcuApiResponseWorkflowStatus,
@@ -52,6 +49,18 @@ async function pollForCompletion(
       }
     )
 
+    if (!response.ok) {
+      let errorBody = ''
+      try {
+        errorBody = await response.text()
+      } catch {
+        // ignore errors while reading the error body
+      }
+      throw new Error(
+        `ComfyICU status poll failed with HTTP ${response.status} ${response.statusText}: ${errorBody}`
+      )
+    }
+
     const status: ComfyIcuApiResponseWorkflowStatus = await response.json()
 
     if (status.status === 'completed' || status.status === 'success') {
@@ -96,13 +105,36 @@ export async function resolveSegment(
   // Inject prompt into the workflow data
   let workflowData = workflow.data
   if (promptField) {
+    // Choose the appropriate positive prompt based on the segment category,
+    // falling back to the image prompt if more specific prompts are unavailable.
+    let positivePrompt = request.prompts.image.positive
+    switch (request.segment.category) {
+      case ClapSegmentCategory.DIALOGUE:
+        if (request.prompts.voice && request.prompts.voice.positive) {
+          positivePrompt = request.prompts.voice.positive
+        }
+        break
+      case ClapSegmentCategory.SOUND:
+        if (request.prompts.audio && request.prompts.audio.positive) {
+          positivePrompt = request.prompts.audio.positive
+        }
+        break
+      case ClapSegmentCategory.MUSIC:
+        if (request.prompts.music && request.prompts.music.positive) {
+          positivePrompt = request.prompts.music.positive
+        }
+        break
+      default:
+        // Keep the image prompt as the default for other categories.
+        break
+    }
     try {
       const parsedData = JSON.parse(workflowData)
       // Walk through nodes and inject prompt value
       for (const nodeId in parsedData) {
         const node = parsedData[nodeId]
         if (node.inputs && promptField.id in node.inputs) {
-          node.inputs[promptField.id] = request.prompts.image.positive
+          node.inputs[promptField.id] = positivePrompt
         }
       }
       workflowData = JSON.stringify(parsedData)

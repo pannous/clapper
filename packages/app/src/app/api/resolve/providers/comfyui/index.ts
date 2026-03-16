@@ -74,12 +74,19 @@ export async function resolveSegment(
     ClapSegmentCategory.MUSIC,
   ].includes(request.segment.category)
 
-  if (
-    clapWorkflow.category === ClapWorkflowCategory.IMAGE_GENERATION &&
-    !clapWorkflow.inputValues[ClapperComfyUiInputIds.PROMPT]
-  ) {
+  if (!clapWorkflow.inputValues[ClapperComfyUiInputIds.PROMPT]) {
     throw new Error(
       `This workflow doesn't seem to have an input required by Clapper (e.g. a node with an input called "prompt")`
+    )
+  }
+
+  if (
+    isVisualCategory &&
+    ClapperComfyUiInputIds.NEGATIVE_PROMPT in clapWorkflow.inputValues &&
+    !clapWorkflow.inputValues[ClapperComfyUiInputIds.NEGATIVE_PROMPT]
+  ) {
+    throw new Error(
+      `This visual workflow declares a "negative prompt" input required by Clapper (e.g. a node with an input called "negative_prompt") but it is not properly mapped`
     )
   }
 
@@ -103,12 +110,46 @@ export async function resolveSegment(
   })
 
   // Build main inputs based on segment category
-  const promptText = isAudioCategory
-    ? (request.prompts.voice?.positive || request.prompts.image.positive)
-    : request.prompts.image.positive
-  const negativePromptText = isAudioCategory
-    ? ''
-    : request.prompts.image.negative
+  const segmentCategory = request.segment?.category
+
+  let promptText: string
+  let negativePromptText: string
+
+  switch (segmentCategory) {
+    case ClapSegmentCategory.DIALOGUE:
+      promptText =
+        request.prompts.voice?.positive || request.prompts.image.positive
+      negativePromptText =
+        request.prompts.voice?.negative ?? request.prompts.image.negative
+      break
+    case ClapSegmentCategory.SOUND:
+      promptText =
+        request.prompts.audio?.positive ||
+        request.prompts.voice?.positive ||
+        request.prompts.image.positive
+      negativePromptText =
+        request.prompts.audio?.negative ??
+        request.prompts.voice?.negative ??
+        request.prompts.image.negative
+      break
+    case ClapSegmentCategory.MUSIC:
+      promptText =
+        request.prompts.music?.positive ||
+        request.prompts.audio?.positive ||
+        request.prompts.voice?.positive ||
+        request.prompts.image.positive
+      negativePromptText =
+        request.prompts.music?.negative ??
+        request.prompts.audio?.negative ??
+        request.prompts.voice?.negative ??
+        request.prompts.image.negative
+      break
+    default:
+      // Visual or other categories default to image prompts
+      promptText = request.prompts.image.positive
+      negativePromptText = request.prompts.image.negative
+      break
+  }
 
   const mainInputs: [string, any][] = [
     [ClapperComfyUiInputIds.PROMPT, promptText],
@@ -167,22 +208,23 @@ export async function resolveSegment(
   const getAssetPaths = (rawOutput: any) => {
     const outputData = rawOutput[ClapperComfyUiInputIds.OUTPUT]
     if (clapWorkflow.category === ClapWorkflowCategory.VIDEO_GENERATION) {
-      return (
-        outputData?.videos ||
-        outputData?.gifs ||
-        outputData?.images
-      ).map((asset: any) => api.getPathImage(asset))
+      const assets =
+        outputData?.videos ??
+        outputData?.gifs ??
+        outputData?.images ??
+        []
+      return assets.map((asset: any) => api.getPathImage(asset))
     } else if (isAudioCategory) {
       // Audio workflows may output via audio or images nodes
-      return (
-        outputData?.audio ||
-        outputData?.files ||
-        outputData?.images
-      ).map((asset: any) => api.getPathImage(asset))
+      const assets =
+        outputData?.audio ??
+        outputData?.files ??
+        outputData?.images ??
+        []
+      return assets.map((asset: any) => api.getPathImage(asset))
     } else {
-      return outputData?.images.map(
-        (img: any) => api.getPathImage(img)
-      )
+      const images = outputData?.images ?? []
+      return images.map((img: any) => api.getPathImage(img))
     }
   }
   const assetPaths = getAssetPaths(rawOutput)
