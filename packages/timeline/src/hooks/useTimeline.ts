@@ -1233,7 +1233,7 @@ export const useTimeline = create<TimelineStore>((set, get) => ({
         isPreview,
         height: isPreview ? defaultPreviewHeight : defaultCellHeight,
         hue: 0,
-        occupied: false,
+        occupied: true,
         visible: true,
       },
     ]
@@ -1291,8 +1291,20 @@ export const useTimeline = create<TimelineStore>((set, get) => ({
       : trackCategory === ClapSegmentCategory.SOUND ? ClapOutputType.AUDIO
       : ClapOutputType.TEXT
 
+    // Check for time-overlap collisions on the requested track
+    const { segments, findFreeTrack: findFree } = get()
+    const hasCollision = segments.some(
+      (s) =>
+        s.track === track &&
+        !(s.endTimeInMs <= startTimeInMs || s.startTimeInMs >= segmentEndTimeInMs)
+    )
+
+    const resolvedTrack = hasCollision
+      ? findFree({ startTimeInMs, endTimeInMs: segmentEndTimeInMs })
+      : track
+
     const clapSegment = newSegment({
-      track,
+      track: resolvedTrack,
       startTimeInMs,
       endTimeInMs: segmentEndTimeInMs,
       category: trackCategory,
@@ -1302,15 +1314,21 @@ export const useTimeline = create<TimelineStore>((set, get) => ({
 
     const segment = await clapSegmentToTimelineSegment(clapSegment)
 
-    await addSegment({ segment, startTimeInMs, track })
+    await addSegment({ segment, startTimeInMs, track: resolvedTrack })
 
     return segment
   },
 
   moveSegmentToTrack: (segment: TimelineSegment, targetTrack: number): boolean => {
     const {
+      width,
+      height,
       tracks,
       segments,
+      cellWidth,
+      defaultSegmentDurationInSteps,
+      durationInMsPerStep,
+      durationInMs,
       invalidate,
       allSegmentsChanged: prevAllChanged,
       atLeastOneSegmentChanged: prevOneChanged,
@@ -1339,21 +1357,40 @@ export const useTimeline = create<TimelineStore>((set, get) => ({
 
     if (hasCollision) { return false }
 
-    segment.track = targetTrack
+    // Immutable update: create new segment with updated track
+    const updatedSegments = segments.map((s) =>
+      s.id === segment.id ? { ...s, track: targetTrack } : s
+    )
 
-    // Update track info if it was empty
-    if (!targetTrackInfo.occupied) {
-      const isPreview =
-        segment.category === ClapSegmentCategory.IMAGE ||
-        segment.category === ClapSegmentCategory.VIDEO
-      targetTrackInfo.name = `${segment.category}`
-      targetTrackInfo.occupied = true
-      targetTrackInfo.isPreview = isPreview
-    }
+    // Immutable update: create new tracks array if target was empty
+    const updatedTracks = !targetTrackInfo.occupied
+      ? tracks.map((t, i) => {
+          if (i !== targetTrack) { return t }
+          const isPreview =
+            segment.category === ClapSegmentCategory.IMAGE ||
+            segment.category === ClapSegmentCategory.VIDEO
+          return {
+            ...t,
+            name: `${segment.category}`,
+            occupied: true,
+            isPreview,
+          }
+        })
+      : [...tracks]
 
     set({
+      segments: updatedSegments,
       allSegmentsChanged: prevAllChanged + 1,
       atLeastOneSegmentChanged: prevOneChanged + 1,
+      ...computeContentSizeMetrics({
+        width,
+        height,
+        tracks: updatedTracks,
+        cellWidth,
+        defaultSegmentDurationInSteps,
+        durationInMsPerStep,
+        durationInMs,
+      }),
     })
 
     invalidate()

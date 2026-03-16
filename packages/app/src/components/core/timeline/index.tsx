@@ -4,6 +4,7 @@ import { ClapTimeline, useTimeline, SegmentResolver } from '@aitube/timeline'
 import { useMonitor } from '@/services/monitor/useMonitor'
 import { useResolver } from '@/services/resolver/useResolver'
 import { useUI } from '@/services/ui'
+import { cn } from '@/lib/utils'
 import { TimelineToolbar } from './TimelineToolbar'
 
 export function Timeline(
@@ -58,7 +59,7 @@ export function Timeline(
   ])
 
   return (
-    <div className={className || 'flex h-full w-full flex-col'}>
+    <div className={cn('flex h-full w-full flex-col', className)}>
       <TimelineToolbar />
       <div className="flex-1 overflow-hidden">
         <ClapTimeline showFPS={false} />
